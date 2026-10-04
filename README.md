@@ -131,7 +131,7 @@ void setup() {
 void loop() {
   server.handleClient();
 }
-
+```
 ---
 
 ## 5. Guía de Configuración y Ejecución Paso a Paso
