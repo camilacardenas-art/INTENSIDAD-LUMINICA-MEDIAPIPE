@@ -1,0 +1,132 @@
+# Sistema de Control de Iluminación por Gestos con MediaPipe y ESP32
+
+Este proyecto implementa un sistema de control de iluminación en tiempo real mediante el procesamiento de gestos manuales con visión por computadora. Utiliza **Python (MediaPipe + OpenCV)** para el análisis de video y un microcontrolador **ESP32** (simulado en **Wokwi**) para ejecutar los comandos de iluminación mediante salidas PWM y secuencias automatizadas.
+
+---
+
+## 1. Requisitos y Tecnologías Utilizadas
+
+### **Entorno de Software**
+* **Sistema Operativo:** Windows 10 / 11
+* **Lenguaje y Entorno:** Python 3.12 (VS Code)
+* **Simulador de Hardware:** Wokwi Simulator (`Wokwi-GUEST` Virtual WiFi)
+* **Herramienta de Puente de Red:** Wokwi IoT Network Gateway (`wokwigw.exe` v2.0.1)
+
+### **Librerías de Python**
+* `opencv-python` (Captura de video y renderizado de interfaz)
+* `mediapipe` (v0.10.14 - Detección de puntos clave / landmarks de la mano)
+* `requests` (Envío de peticiones HTTP asíncronas)
+
+---
+
+## 2. Esfuerzo de Hardware y Conexiones (ESP32)
+
+El circuito está montado sobre una tarjeta ESP32 DevKit v1 en Wokwi con las siguientes salidas a LEDs a través de resistencias limitadoras de corriente de $220\,\Omega$:
+
+| Componente | Pin GPIO ESP32 | Tipo de Señal | Función |
+| :--- | :---: | :---: | :--- |
+| **LED Amarillo** | GPIO 18 | Salida PWM (`ledc`) | Iluminación de baja intensidad (30%) / Secuencias |
+| **LED Azul** | GPIO 19 | Salida PWM (`ledc`) | Iluminación de media intensidad (70%) / Secuencias |
+| **LED Rojo** | GPIO 21 | Salida PWM (`ledc`) | Iluminación de alta intensidad (100%) / Secuencias |
+
+---
+
+## 3. Matriz de Gestos, Comandos y Acciones
+
+El script de Python analiza las posiciones relativas de las articulaciones de la mano ($x, y, z$) y las traduce a comandos HTTP que recibe el servidor web montado en el ESP32:
+
+| Gesto Detectado | Comando HTTP | Estado / Acción en el ESP32 |
+| :--- | :---: | :--- |
+| **Puño Cerrado** (`PUNO`) | `GET /cmd?val=A` | Enciende el **LED Amarillo** al **30% de brillo** via PWM. Apaga los demás. |
+| **Victoria / Amor y Paz** (`VICTORIA`) | `GET /cmd?val=B` | Enciende el **LED Azul** al **70% de brillo** via PWM. Apaga los demás. |
+| **Dos Palmas Abiertas** (`DOS_PALMAS`) | `GET /cmd?val=C` | Enciende el **LED Rojo** al **100% de brillo**. Apaga los demás. |
+| **Pulgar Abajo** (`THUMBS_DOWN`) | `GET /cmd?val=D` | Ejecuta el **Modo 1**: Secuencia de barrido continuo (Amarillo $\rightarrow$ Azul $\rightarrow$ Rojo). |
+| **Pulgar Arriba** (`THUMBS_UP`) | `GET /cmd?val=E` | Ejecuta el **Modo 2**: Parpadeo o destello simultáneo de los 3 LEDs. |
+
+---
+
+## 4. Código Fuente
+
+### 4.1 Código C++ para ESP32 (`sketch.ino`)
+
+```cpp
+#include <WiFi.h>
+#include <WebServer.h>
+
+#define LED_AMARILLO 18
+#define LED_AZUL     19
+#define LED_ROJO     21
+
+// Parámetros del PWM
+#define FREC_PWM 5000
+#define RES_PWM  8
+
+WebServer server(80);
+
+void apagarLeds() {
+  ledcWrite(LED_AMARILLO, 0);
+  ledcWrite(LED_AZUL, 0);
+  ledcWrite(LED_ROJO, 0);
+}
+
+void modo1() {
+  for (int i = 0; i < 3; i++) {
+    ledcWrite(LED_AMARILLO, 255); delay(200); apagarLeds();
+    ledcWrite(LED_AZUL, 255);     delay(200); apagarLeds();
+    ledcWrite(LED_ROJO, 255);     delay(200); apagarLeds();
+  }
+}
+
+void modo2() {
+  for (int i = 0; i < 4; i++) {
+    ledcWrite(LED_AMARILLO, 255);
+    ledcWrite(LED_AZUL, 255);
+    ledcWrite(LED_ROJO, 255);
+    delay(250);
+    apagarLeds();
+    delay(250);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Nueva sintaxis para ESP32 Arduino Core v3.0+
+  ledcAttach(LED_AMARILLO, FREC_PWM, RES_PWM);
+  ledcAttach(LED_AZUL, FREC_PWM, RES_PWM);
+  ledcAttach(LED_ROJO, FREC_PWM, RES_PWM);
+
+  apagarLeds();
+
+  // Conexión a la red WiFi virtual de Wokwi
+  WiFi.begin("Wokwi-GUEST", "", 6);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWi-Fi Conectada!");
+  Serial.print("Direccion IP del ESP32: ");
+  Serial.println(WiFi.localIP());
+
+  // Servidor Web para procesar los gestos enviados desde Python
+  server.on("/cmd", []() {
+    if (server.hasArg("val")) {
+      char cmd = server.arg("val")[0];
+      switch (cmd) {
+        case 'A': apagarLeds(); ledcWrite(LED_AMARILLO, (int)(255 * 0.30)); break;
+        case 'B': apagarLeds(); ledcWrite(LED_AZUL, (int)(255 * 0.70)); break;
+        case 'C': apagarLeds(); ledcWrite(LED_ROJO, 255); break;
+        case 'D': modo1(); break;
+        case 'E': modo2(); break;
+      }
+      server.send(200, "text/plain", "OK");
+    }
+  });
+
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
